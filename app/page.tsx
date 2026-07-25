@@ -283,8 +283,8 @@ export default function App() {
     const ac = activeCase;
     const prompt = `You are an AI assistant for Huston Energy Corporation, Oklahoma oil and gas mineral acquisition. Complete this task for the following case.\n\nCASE: ${ac.title} | TYPE: ${ac.type} | COUNTY: ${ac.county}\nDESCRIPTION: ${ac.description}\nTASK: ${task.title}\n${uploadedDoc ? `UPLOADED DOC:\n${uploadedDoc.slice(0,1500)}` : ""}\n\nProduce a complete draft document, letter, or analysis. End with a REVIEW CHECKLIST of 3-5 specific things to verify before approving.`;
     try {
-      const resp = await fetch("https://api.anthropic.com/v1/messages", {
-        method:"POST", headers:{"content-type":"application/json"},
+      const resp = await fetch(EDGE("ai-proxy"), {
+  method:"POST", headers:{"content-type":"application/json","Authorization":`Bearer ${SUPABASE_ANON}`},
         body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1000,tools:[{type:"web_search_20250305",name:"web_search"}],messages:[{role:"user",content:prompt}]})
       });
       const data = await resp.json();
@@ -302,8 +302,8 @@ export default function App() {
     const history = [...aiChat, {role:"user",content:aiInput}];
     setAiChat(history); setAiInput(""); setAiChatLoading(true);
     try {
-      const resp = await fetch("https://api.anthropic.com/v1/messages", {
-        method:"POST", headers:{"content-type":"application/json"},
+      const resp = await fetch(EDGE("ai-proxy"), {
+  method:"POST", headers:{"content-type":"application/json","Authorization":`Bearer ${SUPABASE_ANON}`},,
         body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1000,system:`AI assistant for Huston Energy Corporation Oklahoma mineral acquisition. Case: ${activeCase?.title||"none"}.`,tools:[{type:"web_search_20250305",name:"web_search"}],messages:history})
       });
       const data = await resp.json();
@@ -421,8 +421,8 @@ export default function App() {
     setHeirLoading(true); setHeirReport(null);
     const prompt = `You are a forensic genealogist for an Oklahoma oil and gas mineral acquisition company. Research this individual and return ONLY a JSON object.\n\nSUBJECT: ${heirForm.name}\nCounty: ${heirForm.county}\nState: ${heirForm.state||"Oklahoma"}\nDOB: ${heirForm.dob}\nDOD: ${heirForm.dod}\nMineral location: ${heirForm.minerals}\nNotes: ${heirForm.notes}\n\nSearch FamilySearch.org (LDS), Legacy.com, Findagrave, SSDI, Oklahoma probate records, Newspapers.com, and general web.\n\nReturn this exact JSON:\n{"subject":{"name":"","aka":[],"dob":"","dod":"","birthplace":"","lastResidence":"","mineralCounties":[],"confidence":85},"family":[{"name":"","relationship":"","dob":"","dod":"","lastKnownAddress":"","status":"living","heirStatus":"heir","notes":""}],"probate":{"filed":false,"county":"","caseNo":"","notes":""},"obituary":{"found":false,"source":"","summary":"","survivorsMentioned":[]},"sources":[{"type":"","source":"","relevance":""}],"researchNotes":"","confidenceScore":85,"recommendedNextSteps":[]}`;
     try {
-      const resp = await fetch("https://api.anthropic.com/v1/messages", {
-        method:"POST", headers:{"content-type":"application/json"},
+      const resp = await fetch(EDGE("ai-proxy"), {
+  method:"POST", headers:{"content-type":"application/json","Authorization":`Bearer ${SUPABASE_ANON}`},
         body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1000,tools:[{type:"web_search_20250305",name:"web_search"}],messages:[{role:"user",content:prompt}]})
       });
       const data = await resp.json();
