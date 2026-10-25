@@ -18,9 +18,9 @@ Case intake needs no service-role key, database password, AI key, or new Edge Fu
 
 ## Database setup
 
-The matching project discovered on October 25, 2026 is `hnr-title-suite` (`vlgiofdseyshaxnlbnbx`), currently **INACTIVE**. The verified API URL is `https://vlgiofdseyshaxnlbnbx.supabase.co`; public-key lookup also failed while the project was unavailable. A table inspection returned “Database is possibly not accessible at the moment.” No live schema changes were applied, and the existing schema/data could not be confirmed.
+The matching project discovered on October 25, 2026 is `hnr-title-suite` (`vlgiofdseyshaxnlbnbx`). It was initially **INACTIVE**. The restore request succeeded; the latest observed status is **COMING_UP**. The verified API URL is `https://vlgiofdseyshaxnlbnbx.supabase.co`. Public keys were subsequently retrieved and the local ignored `.env.local` was configured; no keys were committed. A build with that configuration also passed. The database remains inaccessible during startup, so no live schema changes were applied and existing schema/data could not be confirmed.
 
-1. Restore/resume the intended project through the Supabase dashboard.
+1. Wait for the accepted restore to finish and confirm the intended project is healthy.
 2. Inspect existing `public.cases`, policies, and `kv_store` before applying anything. The migration intentionally fails if a `cases` table already exists; reconcile that schema instead of dropping data.
 3. Apply `supabase/migrations/20261025051948_case_intake.sql` through a reviewed migration or the SQL editor. It is transactional and additive. It requires the usual Supabase `auth.users`, `auth.uid()`, `authenticated`, and `anon` objects.
 4. Ensure `public` is exposed through the Data API. Provision a test user; sign in, create a case, reload, and confirm it persists. Verify another user and a signed-out request cannot read it. Run Supabase security/performance advisors after applying.
@@ -58,7 +58,7 @@ The assignee dropdown retains the repository's existing labels. Those labels hav
 
 ## Decisions / access still needed
 
-- Restore the intended Supabase project and configure its public API URL/key in the target environment. Account passwords should be provisioned securely, not posted in an issue or PR.
+- Wait for restoration, then inspect/apply the schema and configure the verified public API URL/key in the deployment environment. The local checkout is already configured. Account passwords should be provisioned securely, not posted in an issue or PR.
 - Confirm approved account identities and whether cases should be shared by Brooks and Michael. The implemented default is per-user isolation. Shared HNR access needs a membership table and reviewed RLS policies; assignee text does not grant access.
 - Confirm the existing county and team-label options and whether legacy cases should be imported. These do not block a new private intake.
 
@@ -67,7 +67,7 @@ The assignee dropdown retains the repository's existing labels. Those labels hav
 - `npm test`: four passing tests: input normalization/allowlist, invalid input rejection, Supabase transport save/retry/reload/error/conflict behavior, and the actual migration on embedded PostgreSQL (PGlite) including ownership/RLS and grants.
 - `npm run typecheck`, `npm run lint`, `npm run build`.
 - `npx playwright install chromium && npm run test:e2e`: browser regression covers sign-in, validation, failed-save retention, retry/double submission, refresh/reload, and read failure using mocked Supabase HTTP responses. Chromium download was blocked in the implementation environment, so this browser test has **not been executed successfully**. It does not replace a live Supabase smoke test.
-- Live Supabase round-trip/advisors remain blocked by the inactive project. Embedded PostgreSQL and mocked transport tests are not proof of a production connection.
+- Live Supabase round-trip/advisors remain blocked while project restoration is in progress. Embedded PostgreSQL and mocked transport tests are not proof of a production connection.
 
 The final `npm audit --omit=dev` reports zero production dependency vulnerabilities. PostCSS is overridden to 8.5.31 to resolve the transitive advisories without moving beyond the React 18-compatible Next.js 15 line. Dependencies are locked. Next.js and the Supabase SDK were updated because the original versions had reported security advisories. A pre-existing duplicate comma in the AI chat request was also fixed so the app compiles.
 
