@@ -18,7 +18,7 @@ Case intake needs no service-role key, database password, AI key, or new Edge Fu
 
 ## Database setup
 
-The matching project discovered on October 25, 2026 is `hnr-title-suite` (`vlgiofdseyshaxnlbnbx`). It was initially **INACTIVE**. The restore request succeeded; the latest observed status is **COMING_UP**. The verified API URL is `https://vlgiofdseyshaxnlbnbx.supabase.co`. Public keys were subsequently retrieved and the local ignored `.env.local` was configured; no keys were committed. A build with that configuration also passed. The database remains inaccessible during startup, so no live schema changes were applied and existing schema/data could not be confirmed.
+The matching project discovered on October 25, 2026 is `hnr-title-suite` (`vlgiofdseyshaxnlbnbx`). It was initially **INACTIVE**. The restore request succeeded; the latest observed status is **RESTORING**. The verified API URL is `https://vlgiofdseyshaxnlbnbx.supabase.co`. Public keys were subsequently retrieved and the local ignored `.env.local` was configured; no keys were committed. A build with that configuration also passed. The database remains inaccessible during startup, so no live schema changes were applied and existing schema/data could not be confirmed.
 
 1. Wait for the accepted restore to finish and confirm the intended project is healthy.
 2. Inspect existing `public.cases`, policies, and `kv_store` before applying anything. The migration intentionally fails if a `cases` table already exists; reconcile that schema instead of dropping data.
