@@ -3,12 +3,15 @@
 // Deployed on Vercel, backed by Supabase
 // All window.storage calls replaced with real Supabase reads/writes via lib/supabase.ts
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   getProjects, insertProject, updateProject,
   getDocLog, insertDocLog,
   kvGet, kvSet,
 } from "../lib/supabase";
+
+import CaseAccess from './case-access';
+import { CASE_TYPES, getCases, createCase, saveCaseTasks, validateCase, type CaseRecord } from '../lib/cases';
 
 const STAGES = ["New","Doc retrieval","ICR / name res.","GIS mapping","Ready to lease"];
 const COUNTIES = ["Major","Ellis","Woodward","Dewey","Garfield","Canadian","Blaine","Grady",
@@ -90,10 +93,38 @@ export default function App() {
   const [showNp, setShowNp] = useState(false);
   const [np, setNp] = useState({tract:"",county:"Major",acres:"",source:"",notes:""});
 
-  // KV-backed state (offers, letters, cases, templates, runsheets, skip, ECF)
+  // Cases use dedicated rows; other modules still use the legacy KV store.
   const [offers, setOffers] = useState<any[]>([]);
   const [letters, setLetters] = useState<any[]>([]);
-  const [cases, setCases] = useState<any[]>([]);
+  const [cases, setCases] = useState<CaseRecord[]>([]);
+  const [caseUser, setCaseUser] = useState<string | null>(null);
+  const [casesLoading, setCasesLoading] = useState(false);
+  const [caseError, setCaseError] = useState('');
+  const [caseSaving, setCaseSaving] = useState(false);
+  const caseLock = useRef(false);
+  const caseRequestId = useRef<string | null>(null);
+  const caseGeneration = useRef(0);
+  const caseUserRef = useRef<string | null>(null);
+  const caseReadId = useRef(0);
+  const onCaseUserChange = useCallback((id: string | null) => {
+    if (id === caseUserRef.current) return;
+    caseUserRef.current = id;
+    caseGeneration.current++;
+    setCaseUser(id); setCases([]); setActiveCase(null); setCaseError('');
+    setAiDraft(null); setAiTaskTarget(null); setAiChat([]); setAiInput(''); setUploadedDoc(null);
+    setShowNewTask(false); setShowNewCase(false);
+    setNewCase({title:"",type:"Probate",county:"",description:"",assignee:""});
+    caseRequestId.current = null;
+  }, []);
+  const refreshCases = useCallback(async () => {
+    const generation = caseGeneration.current;
+    const readId = ++caseReadId.current;
+    setCasesLoading(true); setCaseError('');
+    try { const rows = await getCases(); if (generation === caseGeneration.current && readId === caseReadId.current) setCases(rows); }
+    catch { if (generation === caseGeneration.current) setCaseError('Could not load cases. Check the database setup and project availability, then retry.'); }
+    finally { if (generation === caseGeneration.current) setCasesLoading(false); }
+  }, []);
+  useEffect(() => { if (caseUser) void refreshCases(); }, [caseUser, refreshCases]);
   const [runsheets, setRunsheets] = useState<any[]>([]);
   const [skipSubjects, setSkipSubjects] = useState<any[]>([]);
   const [ecfAlerts, setEcfAlerts] = useState<any[]>([]);
@@ -110,7 +141,7 @@ export default function App() {
   const [calcResult, setCalcResult] = useState<any>(null);
   const [activeCase, setActiveCase] = useState<any>(null);
   const [showNewCase, setShowNewCase] = useState(false);
-  const [newCase, setNewCase] = useState({title:"",type:"Probate",county:"",description:"",assignee:"B. Sumner"});
+  const [newCase, setNewCase] = useState({title:"",type:"Probate",county:"",description:"",assignee:""});
   const [newTask, setNewTask] = useState({title:"",assignee:"B. Sumner",due:"",priority:"Normal"});
   const [showNewTask, setShowNewTask] = useState(false);
   const [aiDraft, setAiDraft] = useState<string|null>(null);
@@ -151,9 +182,9 @@ export default function App() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [p, d, o, l, c, rs, ss, ec, tf, hr, tv] = await Promise.all([
+      const [p, d, o, l, rs, ss, ec, tf, hr, tv] = await Promise.all([
         getProjects(), getDocLog(),
-        kvGet("offers"), kvGet("letters"), kvGet("cases"),
+        kvGet("offers"), kvGet("letters"),
         kvGet("runsheets"), kvGet("skipsubjects"), kvGet("ecfalerts"),
         kvGet("templatefolders"), kvGet("heirreports"), kvGet("treeVerified"),
       ]);
@@ -161,7 +192,6 @@ export default function App() {
       setDocLog(d);
       setOffers(o || []);
       setLetters(l || []);
-      setCases(c || []);
       setRunsheets(rs || []);
       setSkipSubjects(ss || []);
       setEcfAlerts(ec || defaultEcfAlerts());
@@ -256,27 +286,48 @@ export default function App() {
 
   // Cases
   const addCase = async () => {
-    if (!newCase.title.trim()) return;
-    const c = {id:uid(), created_at:new Date().toISOString(), ...newCase, status:"Open", tasks:[]};
-    const updated = [c, ...cases];
-    await saveKv("cases", updated, setCases);
-    setNewCase({title:"",type:"Probate",county:"",description:"",assignee:"B. Sumner"});
-    setShowNewCase(false); setActiveCase(c); flash("✓ Case created.");
+    if (caseLock.current) return;
+    caseLock.current = true; setCaseSaving(true); setCaseError('');
+    const generation = caseGeneration.current;
+    try {
+      const input = validateCase(newCase);
+      caseReadId.current++;
+      caseRequestId.current ??= crypto.randomUUID();
+      const c = await createCase(input, caseRequestId.current);
+      if (generation !== caseGeneration.current) return;
+      setCases(rows => [c, ...rows.filter(row => row.id !== c.id)]);
+      caseRequestId.current = null;
+      setNewCase({title:"",type:"Probate",county:"",description:"",assignee:""});
+      setShowNewCase(false); setActiveCase(c); flash('✓ Case saved to Supabase.');
+    } catch (e: any) { if (generation === caseGeneration.current) setCaseError(e.message || 'Could not save case. Retry to confirm the save.'); }
+    finally { caseLock.current = false; setCaseSaving(false); }
+  };
+  const persistTasks = async (tasks: any[]) => {
+    if (caseLock.current || !activeCase) return false;
+    caseLock.current = true; setCaseSaving(true); setCaseError('');
+    const generation = caseGeneration.current;
+    try {
+      const current = cases.find(c => c.id === activeCase.id);
+      if (!current) throw new Error('Refresh cases before saving tasks.');
+      const saved = await saveCaseTasks(current, tasks);
+      if (generation !== caseGeneration.current) return false;
+      setCases(rows => rows.map(c => c.id === saved.id ? saved : c)); setActiveCase(saved);
+      return true;
+    } catch (e: any) { setCaseError(e.message || 'Task save failed.'); return false; }
+    finally { caseLock.current = false; setCaseSaving(false); }
   };
   const addTask = async () => {
     if (!newTask.title.trim() || !activeCase) return;
-    const task = {id:uid(), created_at:new Date().toISOString(), ...newTask, status:"Pending"};
-    const updated = cases.map(c => c.id===activeCase.id ? {...c,tasks:[...c.tasks,task]} : c);
-    await saveKv("cases", updated, setCases);
-    setActiveCase(updated.find(c => c.id===activeCase.id));
-    setNewTask({title:"",assignee:"B. Sumner",due:"",priority:"Normal"});
-    setShowNewTask(false); flash("✓ Task added.");
+    const task = {id:uid(), created_at:new Date().toISOString(), ...newTask, title:newTask.title.trim(), status:"Pending"};
+    if (await persistTasks([...(cases.find(c => c.id === activeCase.id)?.tasks || []), task])) {
+      setNewTask({title:"",assignee:"B. Sumner",due:"",priority:"Normal"});
+      setShowNewTask(false); flash('✓ Task saved.');
+    }
   };
   const updateTask = async (taskId: string, patch: object) => {
-    const updated = cases.map(c => c.id===activeCase.id
-      ? {...c, tasks:c.tasks.map((t: any) => t.id===taskId ? {...t,...patch} : t)} : c);
-    await saveKv("cases", updated, setCases);
-    setActiveCase(updated.find((c: any) => c.id===activeCase.id));
+    const current = cases.find(c => c.id === activeCase?.id);
+    if (current) return persistTasks(current.tasks.map(t => t.id === taskId ? {...t,...patch} : t));
+    return false;
   };
   const runAiDraft = async (task: any) => {
     setAiTaskTarget(task); setAiDraft(null); setAiDraftLoading(true);
@@ -294,7 +345,7 @@ export default function App() {
   };
   const approveAiDraft = async () => {
     if (!aiTaskTarget || !aiDraft) return;
-    await updateTask(aiTaskTarget.id, {aiDraft, reviewed:true, status:"Complete", completedAt:new Date().toISOString()});
+    if (!await updateTask(aiTaskTarget.id, {aiDraft, reviewed:true, status:"Complete", completedAt:new Date().toISOString()})) return;
     setAiDraft(null); setAiTaskTarget(null); flash("✓ Task approved.");
   };
   const sendAiChat = async () => {
@@ -303,7 +354,7 @@ export default function App() {
     setAiChat(history); setAiInput(""); setAiChatLoading(true);
     try {
       const resp = await fetch(EDGE("ai-proxy"), {
-  method:"POST", headers:{"content-type":"application/json","Authorization":`Bearer ${SUPABASE_ANON}`},,
+  method:"POST", headers:{"content-type":"application/json","Authorization":`Bearer ${SUPABASE_ANON}`},
         body:JSON.stringify({model:"claude-sonnet-4-6",max_tokens:1000,system:`AI assistant for Huston Energy Corporation Oklahoma mineral acquisition. Case: ${activeCase?.title||"none"}.`,tools:[{type:"web_search_20250305",name:"web_search"}],messages:history})
       });
       const data = await resp.json();
@@ -1015,31 +1066,35 @@ export default function App() {
           {heirSaved.length>0&&!heirReport&&<div style={{marginTop:12}}><p style={{fontSize:11,color:"#64748b",margin:"0 0 6px"}}>Previous searches</p>{heirSaved.slice(0,5).map((h:any)=><div key={h.id} style={{...s.card(false),display:"flex",justifyContent:"space-between",alignItems:"center"}}><div><p style={{fontWeight:500,fontSize:12,margin:0}}>{h.subject}</p><p style={{fontSize:10,color:"#94a3b8",margin:0}}>{new Date(h.created_at).toLocaleDateString()}</p></div><button style={{...s.btn(),fontSize:11,padding:"3px 8px"}} onClick={()=>setHeirReport(h.report)}>View</button></div>)}</div>}
         </>}
 
-        {tab==="cases"&&<>
+        {tab==="cases"&&<CaseAccess onUserChange={onCaseUserChange}>
           <div style={s.hdr}>
             <p style={s.h1}>Case management{activeCase&&<span style={{fontSize:11,fontWeight:400,color:"#64748b"}}> — {activeCase.title}</span>}</p>
             <div style={{display:"flex",gap:6}}>
               {activeCase&&<button style={s.btn("#64748b")} onClick={()=>setActiveCase(null)}>← All cases</button>}
-              <button style={s.btn("#16a34a")} onClick={()=>setShowNewCase(v=>!v)}>+ New case</button>
+              <button disabled={caseSaving || casesLoading} style={s.btn("#16a34a")} onClick={()=>setShowNewCase(v=>!v)}>+ New case</button>
             </div>
           </div>
-          {showNewCase&&<div style={{...s.card(false),background:"#f8fafc",marginBottom:12}}>
+          {caseError&&<p role="alert" style={s.warn}>{caseError}{caseRequestId.current && " Retry Create to confirm the original submission. Refresh cases before starting a different intake."}</p>}
+          <button style={s.btn()} disabled={casesLoading || caseSaving} onClick={refreshCases}>Refresh cases</button>
+          {casesLoading&&<p role="status">Loading cases…</p>}
+          {showNewCase&&<form onSubmit={e=>{e.preventDefault(); void addCase();}} style={{...s.card(false),background:"#f8fafc",marginBottom:12}}>
             <div style={s.g2}>
-              <div><label style={s.lbl}>Title *</label><input style={s.inp} value={newCase.title} onChange={e=>setNewCase(v=>({...v,title:e.target.value}))} placeholder="Estate of James Whitfield"/></div>
-              <div><label style={s.lbl}>Type</label><select style={s.sel} value={newCase.type} onChange={e=>setNewCase(v=>({...v,type:e.target.value}))}>{["Probate","Quiet Title","Mineral Acquisition","Lease Negotiation","Title Curative","Heirship Research"].map(t=><option key={t}>{t}</option>)}</select></div>
-              <div><label style={s.lbl}>County</label><select style={s.sel} value={newCase.county} onChange={e=>setNewCase(v=>({...v,county:e.target.value}))}>{COUNTIES.map(c=><option key={c}>{c}</option>)}</select></div>
-              <div><label style={s.lbl}>Assigned to</label><select style={s.sel} value={newCase.assignee} onChange={e=>setNewCase(v=>({...v,assignee:e.target.value}))}>{TEAM.map(t=><option key={t}>{t}</option>)}</select></div>
+              <div><label htmlFor="case-title" style={s.lbl}>Title *</label><input id="case-title" required maxLength={200} disabled={caseSaving || !!caseRequestId.current} style={s.inp} value={newCase.title} onChange={e=>setNewCase(v=>({...v,title:e.target.value}))} placeholder="Estate of James Whitfield"/></div>
+              <div><label htmlFor="case-type" style={s.lbl}>Type</label><select id="case-type" disabled={caseSaving || !!caseRequestId.current} style={s.sel} value={newCase.type} onChange={e=>setNewCase(v=>({...v,type:e.target.value}))}>{CASE_TYPES.map(t=><option key={t}>{t}</option>)}</select></div>
+              <div><label htmlFor="case-county" style={s.lbl}>County</label><select id="case-county" disabled={caseSaving || !!caseRequestId.current} style={s.sel} value={newCase.county} onChange={e=>setNewCase(v=>({...v,county:e.target.value}))}><option value="">Not specified</option>{COUNTIES.map(c=><option key={c}>{c}</option>)}</select></div>
+              <div><label htmlFor="case-assignee" style={s.lbl}>Assigned to</label><select id="case-assignee" disabled={caseSaving || !!caseRequestId.current} style={s.sel} value={newCase.assignee} onChange={e=>setNewCase(v=>({...v,assignee:e.target.value}))}><option value="">Unassigned</option>{TEAM.map(t=><option key={t}>{t}</option>)}</select></div>
             </div>
-            <div style={{marginBottom:8}}><label style={s.lbl}>Description</label><textarea style={{...s.inp,resize:"vertical" as const}} rows={2} value={newCase.description} onChange={e=>setNewCase(v=>({...v,description:e.target.value}))}/></div>
-            <div style={{display:"flex",gap:6}}><button style={s.btn("#16a34a")} onClick={addCase}>Create</button><button style={s.btn("#94a3b8")} onClick={()=>setShowNewCase(false)}>Cancel</button></div>
-          </div>}
-          {!activeCase&&<div>{cases.length===0&&<p style={{color:"#94a3b8",fontSize:12}}>No cases yet.</p>}{cases.map((c:any)=><div key={c.id} style={{...s.card(false),display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>setActiveCase(c)}><div><div style={{display:"flex",gap:6,alignItems:"center",marginBottom:2}}><span style={{fontWeight:500,fontSize:13}}>{c.title}</span><span style={s.badge("amber")}>{c.type}</span><span style={s.badge("green")}>{c.status}</span></div><p style={{fontSize:11,color:"#64748b",margin:0}}>{c.county} Co · {c.assignee} · {c.tasks?.length||0} tasks</p></div><span style={{color:"#94a3b8"}}>›</span></div>)}</div>}
+            <div style={{marginBottom:8}}><label htmlFor="case-description" style={s.lbl}>Description</label><textarea id="case-description" maxLength={10000} disabled={caseSaving || !!caseRequestId.current} style={{...s.inp,resize:"vertical" as const}} rows={2} value={newCase.description} onChange={e=>setNewCase(v=>({...v,description:e.target.value}))}/></div>
+            <div style={{display:"flex",gap:6}}><button type="submit" disabled={caseSaving} style={s.btn("#16a34a")}>{caseSaving ? "Saving…" : "Create"}</button><button type="button" disabled={caseSaving} style={s.btn("#94a3b8")} onClick={()=>{setShowNewCase(false);caseRequestId.current=null;}}>Cancel</button></div>
+          </form>}
+          {!activeCase&&<div>{!casesLoading&&!caseError&&cases.length===0&&<p style={{color:"#94a3b8",fontSize:12}}>No cases yet.</p>}{cases.map((c:any)=><div key={c.id} role="button" tabIndex={0} onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();setActiveCase(c);}}} style={{...s.card(false),display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}} onClick={()=>setActiveCase(c)}><div><div style={{display:"flex",gap:6,alignItems:"center",marginBottom:2}}><span style={{fontWeight:500,fontSize:13}}>{c.title}</span><span style={s.badge("amber")}>{c.type}</span><span style={s.badge("green")}>{c.status}</span></div><p style={{fontSize:11,color:"#64748b",margin:0}}>{c.county ? `${c.county} Co` : "County not specified"} · {c.assignee || "Unassigned"} · {c.tasks?.length||0} tasks</p></div><span style={{color:"#94a3b8"}}>›</span></div>)}</div>}
           {activeCase&&(()=>{
             const ac=cases.find((c:any)=>c.id===activeCase.id)||activeCase;
             const pending=(ac.tasks||[]).filter((t:any)=>t.status!=="Complete");
             const done=(ac.tasks||[]).filter((t:any)=>t.status==="Complete");
             return(<div style={{display:"grid",gridTemplateColumns:"1fr 280px",gap:12}}>
               <div>
+                <p style={{...s.sub,whiteSpace:"pre-wrap"}}>{ac.description || "No description."}</p>
                 <div style={{...s.card(false),background:"#f8fafc",marginBottom:8}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
                     <p style={{fontWeight:500,fontSize:12,margin:0}}>Tasks ({pending.length} pending)</p>
@@ -1088,8 +1143,7 @@ export default function App() {
               </div>
             </div>);
           })()}
-        </>}
-
+        </CaseAccess>}
         {tab==="documents"&&<>
           <p style={s.h1}>Document audit log</p>
           <p style={s.sub}>All generated instruments logged here. Written to Supabase doc_log table.</p>

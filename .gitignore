@@ -24,3 +24,8 @@ yarn-error.log*
 .DS_Store
 *.pem
 .vercel
+
+*.tsbuildinfo
+playwright-report/
+test-results/
+supabase/.temp/
